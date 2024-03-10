@@ -1,0 +1,18 @@
+name: Run fate tests
+
+on:
+  pull_request:
+    branches: ["test"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: install package
+        run: sudo apt-get install yasm
+      - name: configure
+        run: ./configure --enable-libxml2
+      - name: run tests
+        run: make -j$(nproc) fate
