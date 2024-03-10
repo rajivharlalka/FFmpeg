@@ -15,6 +15,6 @@ jobs:
       - name: configure
         run: ./configure --enable-libxml2 --samples=fate-suite/
       - name: download samples
-        run: make -$(nproc) fate-rsync
+        run: make -j$(nproc) fate-rsync
       - name: run tests
         run: make -j$(nproc) fate
