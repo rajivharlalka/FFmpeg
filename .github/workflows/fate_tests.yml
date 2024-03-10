@@ -13,6 +13,8 @@ jobs:
       - name: install package
         run: sudo apt-get install yasm
       - name: configure
-        run: ./configure --enable-libxml2
+        run: ./configure --enable-libxml2 --samples=fate-suite/
+      - name: download samples
+        run: make -$(nproc) fate-rsync
       - name: run tests
         run: make -j$(nproc) fate
