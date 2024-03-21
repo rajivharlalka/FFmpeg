@@ -1,0 +1,20 @@
+name: Run fate tests
+
+on:
+  pull_request:
+    branches: ["test"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: install package
+        run: sudo apt-get install yasm
+      - name: configure
+        run: ./configure --enable-libxml2 --samples=fate-suite/
+      - name: download samples
+        run: make -j$(nproc) fate-rsync
+      - name: run tests
+        run: make -j$(nproc) fate
