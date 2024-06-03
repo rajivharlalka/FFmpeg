@@ -39,14 +39,20 @@ static av_cold int pu21_init(AVFilterContext* ctx) {
 }
 
 static int filter_frame(AVFilterLink* inlink, AVFrame* frame) {
-  AVFilterContext* ctx = inlink->dst;
-  PU21Context* pu21 = ctx->priv;
+  PU21Context* pu21 = inlink->dst->priv;
+  int width = frame->width;
+  int height = frame->height;
+  int linesize = frame->linesize[0];
+  uint8_t* data = frame->data[0];
 
-  int x, y;
-  for (y = 0; y < frame->height; y++) {
-    for (x = 0; x < frame->width; x++) {
-      // actual pu21 transform function from the matlab and references interpretation
-      // frame->data[0][y * frame->linesize[0] + x] = x + y;  // testing for the filter to work
+  double par[7];
+  memcpy(par, pu21->par, sizeof(par));
+
+  for (int y = 0; y < height; y++) {
+    for (int x = 0; x < width; x++) {
+      double Y = ((double)data[y * linesize + x]) / 255.0 * 10000.0;
+      double V = fmax(par[6] * (pow((par[0] + par[1] * pow(Y, par[3])) / (1 + par[2] * pow(Y, par[3])), par[4]) - par[5]), 0);
+      data[y * linesize + x] = (uint8_t)(fmin(fmax(V, 0), 255));
     }
   }
 
