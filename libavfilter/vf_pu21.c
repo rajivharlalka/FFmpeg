@@ -11,21 +11,22 @@ typedef struct PU21Context {
   double L_min, L_max;
   double par[7];
   char* type;
+  int multiplier;
 } PU21Context;
 
 #define OFFSET(x) offsetof(PU21Context, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption pu21_options[] = {
     { "type", "Set the type of encoding", OFFSET(type), AV_OPT_TYPE_STRING, {.str = "banding_glare"}, 0, 0, FLAGS }, // options can be banding, banding_glare, peaks, peaks_glare
-    { NULL }
+    { "L_min", "Set the minimum luminance value", OFFSET(L_min), AV_OPT_TYPE_DOUBLE, {.dbl = 0.005}, 0.005, 10000, FLAGS },
+    { "L_max", "Set the maximum luminance value", OFFSET(L_max), AV_OPT_TYPE_DOUBLE, {.dbl = 10000}, 0.005, 10000, FLAGS },
+    {"multiplier", "Set the parameters for the encoding", OFFSET(multiplier), AV_OPT_TYPE_INT, {.i64 = 1}, 1, 10000, FLAGS}
 };
 
 AVFILTER_DEFINE_CLASS(pu21);
 
 static av_cold int pu21_init(AVFilterContext* ctx) {
   PU21Context* pu21 = ctx->priv;
-  pu21->L_min = 0.005;
-  pu21->L_max = 10000;
 
   // These are the default parameters for the banding_glare encoding, would add rest of the parameters using switch case based on pu21->type
   pu21->par[0] = 0.353487901;
@@ -38,25 +39,26 @@ static av_cold int pu21_init(AVFilterContext* ctx) {
   return 0;
 }
 
-static int filter_frame(AVFilterLink* inlink, AVFrame* frame) {
+static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
   PU21Context* pu21 = inlink->dst->priv;
-  int width = frame->width;
-  int height = frame->height;
-  int linesize = frame->linesize[0];
-  uint8_t* data = frame->data[0];
+  int width = input->width;
+  int height = input->height;
+  int linesize = input->linesize[0];
+  uint8_t* src = input->data[0];
 
   double par[7];
   memcpy(par, pu21->par, sizeof(par));
 
   for (int y = 0; y < height; y++) {
-    for (int x = 0; x < width; x++) {
-      double Y = ((double)data[y * linesize + x]) / 255.0 * 10000.0;
+    for (int x = 0; x < linesize; x++) {
+      double pixel_val = ((double)src[y * linesize + x]);
+      double Y = pixel_val * (pu21->multiplier);
       double V = fmax(par[6] * (pow((par[0] + par[1] * pow(Y, par[3])) / (1 + par[2] * pow(Y, par[3])), par[4]) - par[5]), 0);
-      data[y * linesize + x] = (uint8_t)(fmin(fmax(V, 0), 255));
+      src[y * linesize + x] = (uint8_t)(V);
     }
   }
 
-  return ff_filter_frame(inlink->dst->outputs[0], frame);
+  return ff_filter_frame(inlink->dst->outputs[0], input);
 }
 
 static const AVFilterPad pu21_inputs[] = {
