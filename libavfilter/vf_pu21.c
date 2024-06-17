@@ -44,17 +44,22 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
   int width = input->width;
   int height = input->height;
   int linesize = input->linesize[0];
-  uint8_t* src = input->data[0];
+  uint16_t* src = (uint16_t*)input->data[0];
+  int pixel_format = input->format;
+
+  av_log(inlink->dst, AV_LOG_DEBUG, "Filter input: %s, %ux%u (%"PRId64").\n",
+    av_get_pix_fmt_name(input->format),
+    input->width, input->height, input->pts);
 
   double par[7];
   memcpy(par, pu21->par, sizeof(par));
 
   for (int y = 0; y < height; y++) {
-    for (int x = 0; x < linesize; x++) {
+    for (int x = 0; x < width; x++) {
       double pixel_val = ((double)src[y * linesize + x]);
       double Y = pixel_val * (pu21->multiplier);
       double V = fmax(par[6] * (pow((par[0] + par[1] * pow(Y, par[3])) / (1 + par[2] * pow(Y, par[3])), par[4]) - par[5]), 0);
-      src[y * linesize + x] = (uint8_t)(V);
+      src[y * linesize + x] = (uint16_t)(V);
     }
   }
 

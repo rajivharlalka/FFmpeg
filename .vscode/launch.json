@@ -1,0 +1,41 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "gdb without multiplier",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/ffmpeg_g",
+      "args": [
+        "-i",
+        "~/Downloads/passengers_video.mkv",
+        "-vf",
+        "pu21",
+        "test_out_6.mp4"
+      ], //define your args!
+      "stopAtEntry": true,
+      "cwd": "${workspaceFolder}",
+      "externalConsole": true,
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb"
+    },
+    {
+      "name": "gdb with multiplier",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/ffmpeg_g",
+      "args": [
+        "-i",
+        "~/Downloads/passengers_video.mkv",
+        "-vf",
+        "pu21=multiplier=10000",
+        "test_out_6.mp4"
+      ], //define your args!
+      "stopAtEntry": true,
+      "cwd": "${workspaceFolder}",
+      "externalConsole": true,
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb"
+    }
+  ]
+}
