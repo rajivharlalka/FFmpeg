@@ -43,8 +43,8 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
   PU21Context* pu21 = inlink->dst->priv;
   int width = input->width;
   int height = input->height;
-  int linesize = input->linesize[0];
   uint16_t* src = (uint16_t*)input->data[0];
+  int linesize = input->linesize[0] / sizeof(*src);
   int pixel_format = input->format;
 
   av_log(inlink->dst, AV_LOG_DEBUG, "Filter input: %s, %ux%u (%"PRId64").\n",
