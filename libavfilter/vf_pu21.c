@@ -1,10 +1,12 @@
 
-#include <libavfilter/avfilter.h>
-#include <libavutil/opt.h>
-#include <libavutil/pixdesc.h>
-#include <libavutil/imgutils.h>
-#include <libavfilter/formats.h>
-#include <libavfilter/internal.h>
+#include "libavfilter/avfilter.h"
+#include "libavutil/opt.h"
+#include "libavutil/pixdesc.h"
+#include "libavutil/imgutils.h"
+#include "libavfilter/formats.h"
+#include "libavfilter/internal.h"
+#include "video.h"
+
 
 typedef struct PU21Context {
   const AVClass* class;
@@ -41,12 +43,47 @@ static av_cold int pu21_init(AVFilterContext* ctx) {
 }
 
 static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
-  PU21Context* pu21 = inlink->dst->priv;
-  int width = input->width;
-  int height = input->height;
-  uint16_t* src = (uint16_t*)input->data[0];
-  int linesize = input->linesize[0] / sizeof(*src);
+  AVFilterContext* ctx = inlink->dst;
+  PU21Context* pu21 = ctx->priv;
+
+  AVFilterLink* outlink = ctx->outputs[0];
+  AVFrame* out;
+
+  if (av_frame_is_writable(input)) {
+    out = input;
+  }
+  else {
+    out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
+    if (!out) {
+      av_frame_free(&input);
+      return AVERROR(ENOMEM);
+    }
+    av_frame_copy_props(out, input);
+  }
+
+  const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(inlink->format);
+  const int width = input->width;
+  const int height = input->height;
+
+  uint8_t* src = input->data[0];
+  uint16_t* src16 = (uint16_t*)input->data[0];
+  float* src32 = (float*)input->data[0];
+
+  int size = 1;
+  int depth = desc->comp[0].depth;
   int pixel_format = input->format;
+  int linesize;
+
+  if (depth <= 8) {
+    linesize = input->linesize[0];
+  }
+  else if (depth <= 16) {
+    linesize = input->linesize[0] / 2;
+  }
+  else {
+    linesize = input->linesize[0] / 4;
+  }
+
 
   av_log(inlink->dst, AV_LOG_DEBUG, "Filter input: %s, %ux%u (%"PRId64").\n",
     av_get_pix_fmt_name(input->format),
@@ -60,11 +97,21 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
       double pixel_val = ((double)src[y * linesize + x]);
       double Y = pixel_val * (pu21->multiplier);
       double V = fmax(par[6] * (pow((par[0] + par[1] * pow(Y, par[3])) / (1 + par[2] * pow(Y, par[3])), par[4]) - par[5]), 0);
-      src[y * linesize + x] = (uint16_t)(V);
+      if (depth <= 8) {
+        src[y * linesize + x] = (uint8_t)(V);
+      }
+      else if (depth <= 16) {
+        src16[y * linesize + x] = (uint16_t)(V);
+      }
+      else {
+        src32[y * linesize + x] = (float)(V);
+      }
     }
   }
 
-  return ff_filter_frame(inlink->dst->outputs[0], input);
+  if (out != input)
+    av_frame_free(&input);
+  return ff_filter_frame(outlink, out);
 }
 
 static const AVFilterPad pu21_inputs[] = {
