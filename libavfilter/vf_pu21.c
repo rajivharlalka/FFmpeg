@@ -2,6 +2,7 @@
 #include "libavfilter/avfilter.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
+#include "libavutil/mem.h"
 #include "libavutil/imgutils.h"
 #include "libavfilter/formats.h"
 #include "libavfilter/internal.h"
@@ -14,6 +15,12 @@ typedef struct PU21Context {
   double par[7];
   char* type;
   int multiplier;
+
+  int depth;
+  int planewidth[4];
+  int planeheight[4];
+  float* buffer;
+  int nb_planes;
 } PU21Context;
 
 #define OFFSET(x) offsetof(PU21Context, x)
@@ -61,50 +68,66 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
     av_frame_copy_props(out, input);
   }
 
-  const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(inlink->format);
-  const int width = input->width;
-  const int height = input->height;
 
-  uint8_t* src = input->data[0];
-  uint16_t* src16 = (uint16_t*)input->data[0];
-  float* src32 = (float*)input->data[0];
+  int plane;
+  for (plane = 0; plane < pu21->nb_planes; plane++) {
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(inlink->format);
+    const int height = pu21->planeheight[plane];
+    const int width = pu21->planewidth[plane];
+    const uint8_t* src = input->data[plane];
+    const uint16_t* src16 = (const uint16_t*)input->data[plane];
+    const float* src32 = (const float*)input->data[plane];
+    uint8_t* dst = out->data[plane];
+    uint16_t* dst16 = (uint16_t*)out->data[plane];
+    float* dst32 = (float*)out->data[plane];
 
-  int size = 1;
-  int depth = desc->comp[0].depth;
-  int pixel_format = input->format;
-  int linesize;
+    int depth = pu21->depth;
+    int pixel_format = input->format;
+    int linesize;
 
-  if (depth <= 8) {
-    linesize = input->linesize[0];
-  }
-  else if (depth <= 16) {
-    linesize = input->linesize[0] / 2;
-  }
-  else {
-    linesize = input->linesize[0] / 4;
-  }
+    if (depth <= 8) {
+      linesize = input->linesize[plane];
+    }
+    else if (depth <= 16) {
+      linesize = input->linesize[plane] / 2;
+    }
+    else {
+      linesize = input->linesize[plane] / 4;
+    }
 
 
-  av_log(inlink->dst, AV_LOG_DEBUG, "Filter input: %s, %ux%u (%"PRId64").\n",
-    av_get_pix_fmt_name(input->format),
-    input->width, input->height, input->pts);
+    av_log(inlink->dst, AV_LOG_DEBUG, "Filter input: %s, %ux%u (%"PRId64").\n",
+      av_get_pix_fmt_name(input->format),
+      input->width, input->height, input->pts);
 
-  double par[7];
-  memcpy(par, pu21->par, sizeof(par));
+    double par[7];
+    memcpy(par, pu21->par, sizeof(par));
+    double pixel_val;
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
 
-  for (int y = 0; y < height; y++) {
-    for (int x = 0; x < width; x++) {
-      double pixel_val = ((double)src[y * linesize + x]);
-      double Y = pixel_val * (pu21->multiplier);
-      double V = fmax(par[6] * (pow((par[0] + par[1] * pow(Y, par[3])) / (1 + par[2] * pow(Y, par[3])), par[4]) - par[5]), 0);
-      if (depth <= 8) {
-        src[y * linesize + x] = (uint8_t)(V);
-      }
-      else if (depth <= 16) {
-        src16[y * linesize + x] = (uint16_t)(V);
-      }
-      else {
-        src32[y * linesize + x] = (float)(V);
+        if (depth <= 8) {
+          pixel_val = ((double)src[y * linesize + x]);
+        }
+        else if (depth <= 16) {
+          pixel_val = ((double)src16[y * linesize + x]);
+        }
+        else {
+          pixel_val = src32[y * linesize + x];
+        }
+
+        float Y = pixel_val * (pu21->multiplier);
+        float V = fmax(par[6] * (pow((par[0] + par[1] * pow(Y, par[3])) / (1 + par[2] * pow(Y, par[3])), par[4]) - par[5]), 0);
+
+        if (depth <= 8) {
+          dst[y * linesize + x] = (uint8_t)(V);
+        }
+        else if (depth <= 16) {
+          dst16[y * linesize + x] = (uint16_t)(V);
+        }
+        else {
+          dst32[y * linesize + x] = (V);
+        }
       }
     }
   }
@@ -114,10 +137,34 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
   return ff_filter_frame(outlink, out);
 }
 
+static av_cold void uninit(AVFilterContext* ctx) {
+  PU21Context* s = ctx->priv;
+
+  av_freep(&s->buffer);
+}
+
+static int config_input(AVFilterLink* inlink) {
+  const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(inlink->format);
+  PU21Context* s = inlink->dst->priv;
+
+  uninit(inlink->dst);
+
+  s->depth = desc->comp[0].depth;
+  s->planewidth[1] = s->planewidth[2] = AV_CEIL_RSHIFT(inlink->w, desc->log2_chroma_w);
+  s->planewidth[0] = s->planewidth[3] = inlink->w;
+  s->planeheight[1] = s->planeheight[2] = AV_CEIL_RSHIFT(inlink->h, desc->log2_chroma_h);
+  s->planeheight[0] = s->planeheight[3] = inlink->h;
+
+  s->nb_planes = av_pix_fmt_count_planes(inlink->format);
+
+  return 0;
+}
+
 static const AVFilterPad pu21_inputs[] = {
     {
         .name = "default",
         .type = AVMEDIA_TYPE_VIDEO,
+        .config_props = config_input,
         .filter_frame = filter_frame,
     }
 };
@@ -134,6 +181,7 @@ const AVFilter ff_vf_pu21 = {
     .description = NULL_IF_CONFIG_SMALL("Convert HDR linear values to PU values using PU21 transform"),
     .priv_size = sizeof(PU21Context),
     .init = pu21_init,
+    .uninit = uninit,
     FILTER_INPUTS(pu21_inputs),
     FILTER_OUTPUTS(pu21_outputs),
     .priv_class = &pu21_class,
