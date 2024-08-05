@@ -69,6 +69,11 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
   }
 
 
+  double input_avg_val[3];
+  double input_max_val[3];
+  double output_avg_val[3];
+  double output_max_val[3];
+
   int plane;
   for (plane = 0; plane < pu21->nb_planes; plane++) {
     const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(inlink->format);
@@ -95,7 +100,6 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
       linesize = input->linesize[plane] / 4;
     }
 
-
     av_log(inlink->dst, AV_LOG_DEBUG, "Filter input: %s, %ux%u (%"PRId64").\n",
       av_get_pix_fmt_name(input->format),
       input->width, input->height, input->pts);
@@ -103,6 +107,7 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
     double par[7];
     memcpy(par, pu21->par, sizeof(par));
     double pixel_val;
+
     for (int y = 0; y < height; y++) {
       for (int x = 0; x < width; x++) {
 
@@ -115,15 +120,23 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
         else {
           pixel_val = src32[y * linesize + x];
         }
-
         float Y = pixel_val * (pu21->multiplier);
+
+        input_avg_val[plane] += Y;
+        input_max_val[plane] = FFMAX(input_max_val[plane], Y);
+
+        // av_log(inlink->dst, AV_LOG_DEBUG, "Frame Value: %d %d %d %f\n", x, y, plane, pixel_val);
+
         float V = fmax(par[6] * (pow((par[0] + par[1] * pow(Y, par[3])) / (1 + par[2] * pow(Y, par[3])), par[4]) - par[5]), 0);
 
+        output_avg_val[plane] += V;
+        output_max_val[plane] = FFMAX(output_max_val[plane], V);
+
         if (depth <= 8) {
-          dst[y * linesize + x] = (uint8_t)(V);
+          dst[y * linesize + x] = V;
         }
         else if (depth <= 16) {
-          dst16[y * linesize + x] = (uint16_t)(V);
+          dst16[y * linesize + x] = V;
         }
         else {
           dst32[y * linesize + x] = (V);
@@ -132,6 +145,9 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
     }
   }
 
+  av_log(inlink->dst, AV_LOG_DEBUG, "INPUT: avg_val Value: %f %f %f Max Value: %f %f %f\n", input_avg_val[0] / (pu21->planeheight[0] * pu21->planewidth[0]), input_avg_val[1] / (pu21->planeheight[1] * pu21->planewidth[1]), input_avg_val[2] / (pu21->planeheight[2] * pu21->planewidth[2]), input_max_val[0], input_max_val[1], input_max_val[2]);
+
+  av_log(inlink->dst, AV_LOG_DEBUG, "OUTPUT: avg_val Value: %f %f %f Max Value: %f %f %f\n", output_avg_val[0] / (pu21->planeheight[0] * pu21->planewidth[0]), output_avg_val[1] / (pu21->planeheight[1] * pu21->planewidth[1]), output_avg_val[2] / (pu21->planeheight[2] * pu21->planewidth[2]), output_max_val[0], output_max_val[1], output_max_val[2]);
   if (out != input)
     av_frame_free(&input);
   return ff_filter_frame(outlink, out);
