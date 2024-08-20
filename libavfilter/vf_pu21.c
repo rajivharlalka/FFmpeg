@@ -49,10 +49,29 @@ static av_cold int pu21_init(AVFilterContext* ctx) {
   return 0;
 }
 
+static inline float apply_bt2020_oetf(float L) {
+  if (L <= 0.0181) {
+    return 4.5 * L;
+  }
+  else {
+    return 1.099 * powf(L, 0.45) - 0.099;
+  }
+}
+
+static const enum AVPixelFormat pix_fmts[] = {
+    AV_PIX_FMT_YUV444P, AV_PIX_FMT_YUV444P10,
+    AV_PIX_FMT_YUV444P10BE, AV_PIX_FMT_YUV444P10LE,
+    AV_PIX_FMT_YUV444P12, AV_PIX_FMT_YUV444P12BE,
+    AV_PIX_FMT_YUV444P12LE, AV_PIX_FMT_YUV444P14,
+    AV_PIX_FMT_YUV444P14LE, AV_PIX_FMT_YUV444P14BE,
+    AV_PIX_FMT_YUV444P16, AV_PIX_FMT_YUV444P16LE,
+    AV_PIX_FMT_YUV444P16BE,
+    AV_PIX_FMT_NONE
+};
+
 static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
   AVFilterContext* ctx = inlink->dst;
   PU21Context* pu21 = ctx->priv;
-
   AVFilterLink* outlink = ctx->outputs[0];
   AVFrame* out;
 
@@ -202,4 +221,5 @@ const AVFilter ff_vf_pu21 = {
     FILTER_OUTPUTS(pu21_outputs),
     .priv_class = &pu21_class,
     .flags = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC,
+    FILTER_PIXFMTS_ARRAY(pix_fmts)
 };
