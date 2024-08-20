@@ -29,7 +29,7 @@ static const AVOption pu21_options[] = {
     { "type", "Set the type of encoding", OFFSET(type), AV_OPT_TYPE_STRING, {.str = "banding_glare"}, 0, 0, FLAGS }, // options can be banding, banding_glare, peaks, peaks_glare
     { "L_min", "Set the minimum luminance value", OFFSET(L_min), AV_OPT_TYPE_DOUBLE, {.dbl = 0.005}, 0.005, 10000, FLAGS },
     { "L_max", "Set the maximum luminance value", OFFSET(L_max), AV_OPT_TYPE_DOUBLE, {.dbl = 10000}, 0.005, 10000, FLAGS },
-    {"multiplier", "Set the parameters for the encoding", OFFSET(multiplier), AV_OPT_TYPE_INT, {.i64 = 1}, 1, 10000, FLAGS},
+    { "multiplier", "Set the parameters for the encoding", OFFSET(multiplier), AV_OPT_TYPE_INT, {.i64 = 1}, 1, 10000, FLAGS},
     { NULL }
 };
 
@@ -49,15 +49,6 @@ static av_cold int pu21_init(AVFilterContext* ctx) {
   return 0;
 }
 
-static inline float apply_bt2020_oetf(float L) {
-  if (L <= 0.0181) {
-    return 4.5 * L;
-  }
-  else {
-    return 1.099 * powf(L, 0.45) - 0.099;
-  }
-}
-
 static const enum AVPixelFormat pix_fmts[] = {
     AV_PIX_FMT_YUV444P, AV_PIX_FMT_YUV444P10,
     AV_PIX_FMT_YUV444P10BE, AV_PIX_FMT_YUV444P10LE,
@@ -68,6 +59,20 @@ static const enum AVPixelFormat pix_fmts[] = {
     AV_PIX_FMT_YUV444P16BE,
     AV_PIX_FMT_NONE
 };
+
+static void yuv_rgb(float y, float u, float v, float* r, float* g, float* b) {
+  // YUV TO RGB conversion based on BT 2020
+  *r = y + 1.4746 * v;
+  *g = y - ((0.2627 * 1.4746) / (0.6780)) * v - (0.0593 * 1.8814) / (0.6780) * u;
+  *b = y + 1.8814 * u;
+}
+
+static void rgb_yuv(float* r, float* g, float* b, float* y, float* u, float* v) {
+  *y = 0.2627 * (*r) + 0.6780 + (*g) + 0.0593 * (*b);
+  *u = (*b - *y) / (1.8814);
+  *v = (*r - *y) / (1.4746);
+}
+
 
 static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
   AVFilterContext* ctx = inlink->dst;
@@ -87,86 +92,118 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
     av_frame_copy_props(out, input);
   }
 
+  const int height = pu21->planeheight[0];
+  const int width = pu21->planewidth[0];
 
-  double input_avg_val[3];
-  double input_max_val[3];
-  double output_avg_val[3];
-  double output_max_val[3];
+  // image pixel sources in 8. 16, 32 bit formats for Y, U and V
+  const uint8_t* src_y = input->data[0];
+  const uint16_t* src16_y = (const uint16_t*)input->data[0];
+  const float* src32_y = (const float*)input->data[0];
+  const uint8_t* src_u = input->data[1];
+  const uint16_t* src16_u = (const uint16_t*)input->data[1];
+  const float* src32_u = (const float*)input->data[1];
+  const uint8_t* src_v = input->data[2];
+  const uint16_t* src16_v = (const uint16_t*)input->data[2];
+  const float* src32_v = (const float*)input->data[2];
 
-  int plane;
-  for (plane = 0; plane < pu21->nb_planes; plane++) {
-    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(inlink->format);
-    const int height = pu21->planeheight[plane];
-    const int width = pu21->planewidth[plane];
-    const uint8_t* src = input->data[plane];
-    const uint16_t* src16 = (const uint16_t*)input->data[plane];
-    const float* src32 = (const float*)input->data[plane];
-    uint8_t* dst = out->data[plane];
-    uint16_t* dst16 = (uint16_t*)out->data[plane];
-    float* dst32 = (float*)out->data[plane];
+  // image pixel destination in 8. 16, 32 bit formats for Y, U and V
+  uint8_t* dst_y = out->data[0];
+  uint16_t* dst16_y = (uint16_t*)out->data[0];
+  float* dst32_y = (float*)out->data[0];
+  uint8_t* dst_u = out->data[1];
+  uint16_t* dst16_u = (uint16_t*)out->data[1];
+  float* dst32_u = (float*)out->data[1];
+  uint8_t* dst_v = out->data[2];
+  uint16_t* dst16_v = (uint16_t*)out->data[2];
+  float* dst32_v = (float*)out->data[2];
 
-    int depth = pu21->depth;
-    int pixel_format = input->format;
-    int linesize;
+  if (input->color_trc == AVCOL_TRC_SMPTE2084 || input->color_trc == AVCOL_TRC_ARIB_STD_B67) {
+  }
+  else if (input->color_trc == AVCOL_TRC_UNSPECIFIED) {
+    // assuming linear input
+    av_log(ctx, AV_LOG_WARNING, "Assuming input frame to be linearized, colors may be off\n");
+    out->color_trc = AVCOL_TRC_LINEAR;
+  }
+  else {
 
-    if (depth <= 8) {
-      linesize = input->linesize[plane];
-    }
-    else if (depth <= 16) {
-      linesize = input->linesize[plane] / 2;
-    }
-    else {
-      linesize = input->linesize[plane] / 4;
-    }
+    av_log(ctx, AV_LOG_ERROR, "Input color_trc not supported, convert to linear before applying the filter\n");
+  }
 
-    av_log(inlink->dst, AV_LOG_DEBUG, "Filter input: %s, %ux%u (%"PRId64").\n",
-      av_get_pix_fmt_name(input->format),
-      input->width, input->height, input->pts);
+  int depth = pu21->depth;
+  int linesize;
 
-    double par[7];
-    memcpy(par, pu21->par, sizeof(par));
-    double pixel_val;
+  if (depth <= 8) {
+    linesize = input->linesize[0];
+  }
+  else if (depth <= 16) {
+    linesize = input->linesize[0] / 2;
+  }
+  else {
+    linesize = input->linesize[0] / 4;
+  }
 
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < width; x++) {
+  for (int y = 0; y < height; y++) {
+    for (int x = 0; x < width; x++) {
+      float r, g, b;
+      float y_s, u_s, v_s;
+      // Get YUV values and convert to their corresponding rgb values
+      if (depth <= 8) {
+        y_s = (float)src_y[y + linesize + x];
+        u_s = (float)src_u[y + linesize + x];
+        v_s = (float)src_v[y + linesize + x];
+      }
+      else if (depth <= 16) {
+        y_s = (float)src16_y[y + linesize + x];
+        u_s = (float)src16_u[y + linesize + x];
+        v_s = (float)src16_v[y + linesize + x];
+      }
+      else {
 
-        if (depth <= 8) {
-          pixel_val = ((double)src[y * linesize + x]);
-        }
-        else if (depth <= 16) {
-          pixel_val = ((double)src16[y * linesize + x]);
-        }
-        else {
-          pixel_val = src32[y * linesize + x];
-        }
-        float Y = pixel_val * (pu21->multiplier);
+        y_s = (float)src32_y[y + linesize + x];
+        u_s = (float)src32_u[y + linesize + x];
+        v_s = (float)src32_v[y + linesize + x];
+      }
 
-        input_avg_val[plane] += Y;
-        input_max_val[plane] = FFMAX(input_max_val[plane], Y);
+      yuv_rgb(y_s, u_s, v_s, &r, &g, &b);
 
-        // av_log(inlink->dst, AV_LOG_DEBUG, "Frame Value: %d %d %d %f\n", x, y, plane, pixel_val);
+      // Linearize the input based on pix_trc and apply OETF/OOTF on the rgb values.
+      if (input->color_trc == AVCOL_TRC_ARIB_STD_B67) {
+        // hlg_lin
+      }
+      else if (input->color_trc == AVCOL_TRC_SMPTE2084) {
+        // pq_li
+        printf("Hello");
+      }
 
-        float V = fmax(par[6] * (pow((par[0] + par[1] * pow(Y, par[3])) / (1 + par[2] * pow(Y, par[3])), par[4]) - par[5]), 0);
+      // apply the pu21 encoding
+      float r_s = r * (pu21->multiplier);
+      float r_d = fmax(pu21->par[6] * (pow((pu21->par[0] + pu21->par[1] * pow(r_s, pu21->par[3])) / (1 + pu21->par[2] * pow(r_s, pu21->par[3])), pu21->par[4]) - pu21->par[5]), 0);
+      float g_s = g * (pu21->multiplier);
+      float g_d = fmax(pu21->par[6] * (pow((pu21->par[0] + pu21->par[1] * pow(g_s, pu21->par[3])) / (1 + pu21->par[2] * pow(g_s, pu21->par[3])), pu21->par[4]) - pu21->par[5]), 0);
+      float b_s = b * (pu21->multiplier);
+      float b_d = fmax(pu21->par[6] * (pow((pu21->par[0] + pu21->par[1] * pow(b_s, pu21->par[3])) / (1 + pu21->par[2] * pow(b_s, pu21->par[3])), pu21->par[4]) - pu21->par[5]), 0);
 
-        output_avg_val[plane] += V;
-        output_max_val[plane] = FFMAX(output_max_val[plane], V);
-
-        if (depth <= 8) {
-          dst[y * linesize + x] = V;
-        }
-        else if (depth <= 16) {
-          dst16[y * linesize + x] = V;
-        }
-        else {
-          dst32[y * linesize + x] = (V);
-        }
+      // convert the rgb values to respective Y, U and V values and pass them in their destination buffers.
+      float y_d, u_d, v_d;
+      rgb_yuv(&r_d, &g_d, &b_d, &y_d, &u_d, &v_d);
+      if (depth <= 8) {
+        dst_y[y * linesize + x] = y_d;
+        dst_u[y * linesize + x] = u_d;
+        dst_v[y * linesize + x] = v_d;
+      }
+      else if (depth <= 16) {
+        dst16_y[y * linesize + x] = y_d;
+        dst16_u[y * linesize + x] = u_d;
+        dst16_v[y * linesize + x] = v_d;
+      }
+      else {
+        dst32_y[y * linesize + x] = y_d;
+        dst32_u[y * linesize + x] = u_d;
+        dst32_v[y * linesize + x] = v_d;
       }
     }
   }
 
-  av_log(inlink->dst, AV_LOG_DEBUG, "INPUT: avg_val Value: %f %f %f Max Value: %f %f %f\n", input_avg_val[0] / (pu21->planeheight[0] * pu21->planewidth[0]), input_avg_val[1] / (pu21->planeheight[1] * pu21->planewidth[1]), input_avg_val[2] / (pu21->planeheight[2] * pu21->planewidth[2]), input_max_val[0], input_max_val[1], input_max_val[2]);
-
-  av_log(inlink->dst, AV_LOG_DEBUG, "OUTPUT: avg_val Value: %f %f %f Max Value: %f %f %f\n", output_avg_val[0] / (pu21->planeheight[0] * pu21->planewidth[0]), output_avg_val[1] / (pu21->planeheight[1] * pu21->planewidth[1]), output_avg_val[2] / (pu21->planeheight[2] * pu21->planewidth[2]), output_max_val[0], output_max_val[1], output_max_val[2]);
   if (out != input)
     av_frame_free(&input);
   return ff_filter_frame(outlink, out);
@@ -191,6 +228,8 @@ static int config_input(AVFilterLink* inlink) {
   s->planeheight[0] = s->planeheight[3] = inlink->h;
 
   s->nb_planes = av_pix_fmt_count_planes(inlink->format);
+
+
 
   return 0;
 }
