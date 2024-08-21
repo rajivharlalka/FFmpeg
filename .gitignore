@@ -41,3 +41,13 @@
 /src
 /mapfile
 /tools/python/__pycache__/
+ffmpeg-samples/*
+*.exr
+*.log
+*.mkv
+*.avi
+*.txt
+*.yuv
+*.mp4
+*.png
+*.json
