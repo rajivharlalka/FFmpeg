@@ -67,12 +67,39 @@ static void rgb_yuv(float* r, float* g, float* b, float* y, float* u, float* v) 
   *v = (*r - *y) / (1.4746);
 }
 
+static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, float* b_d) {
+  // hlg to linear conversion
+  float a = 0.17883277;
+  float b = 1 - 4 * a;
+  float c = 0.5 - a * log(4 * a);
+  float gamma = 1.2;
+
+  float r_s, g_s, b_s;
+
+  // Apply the OETF
+
+  r_s = (r_in <= 0.5) ? pow(r_in, 2) / 3.0 : (exp((r_in - c) / a) + b) / 12;
+  g_s = (g_in <= 0.5) ? pow(g_in, 2) / 3.0 : (exp((g_in - c) / a) + b) / 12;
+  b_s = (b_in <= 0.5) ? pow(b_in, 2) / 3.0 : (exp((b_in - c) / a) + b) / 12;
+
+
+  float Y_s = 0.2627 * r_s + 0.6780 * g_s + 0.0593 * b_s;
+
+  // Apply OOTF
+  *r_d = pow(Y_s, gamma) * r_s;
+  *g_d = pow(Y_s, gamma) * g_s;
+  *b_d = pow(Y_s, gamma) * b_s;
+}
 
 static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
   AVFilterContext* ctx = inlink->dst;
   PU21Context* pu21 = ctx->priv;
   AVFilterLink* outlink = ctx->outputs[0];
   AVFrame* out;
+
+  av_log(inlink->dst, AV_LOG_DEBUG, "Filter input: %s, %ux%u (%"PRId64").\n",
+    av_get_pix_fmt_name(input->format),
+    input->width, input->height, input->pts);
 
   if (av_frame_is_writable(input)) {
     out = input;
@@ -86,8 +113,8 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
     av_frame_copy_props(out, input);
   }
 
-  const int height = pu21->planeheight[0];
-  const int width = pu21->planewidth[0];
+  const int height = input->height;
+  const int width = input->width;
 
   // image pixel sources in 8. 16, 32 bit formats for Y, U and V
   const uint8_t* src_y = input->data[0];
@@ -119,8 +146,9 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
     out->color_trc = AVCOL_TRC_LINEAR;
   }
   else {
-
+    // throw error
     av_log(ctx, AV_LOG_ERROR, "Input color_trc not supported, convert to linear before applying the filter\n");
+    return AVERROR(EINVAL); // Return an appropriate error code
   }
 
   int depth = pu21->depth;
@@ -136,10 +164,11 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
     linesize = input->linesize[0] / 4;
   }
 
+  float r, g, b, r_linear, g_linear, b_linear;
+  float y_s, u_s, v_s;
+  float max_bit_depth = (1 << depth) - 1;
   for (int y = 0; y < height; y++) {
     for (int x = 0; x < width; x++) {
-      float r, g, b;
-      float y_s, u_s, v_s;
       // Get YUV values and convert to their corresponding rgb values
       if (depth <= 8) {
         y_s = (float)src_y[y + linesize + x];
@@ -147,39 +176,51 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
         v_s = (float)src_v[y + linesize + x];
       }
       else if (depth <= 16) {
-        y_s = (float)src16_y[y + linesize + x];
-        u_s = (float)src16_u[y + linesize + x];
-        v_s = (float)src16_v[y + linesize + x];
+        y_s = (float)((uint16_t*)src16_y)[y + linesize + x];
+        u_s = (float)((uint16_t*)src16_u)[y + linesize + x];
+        v_s = (float)((uint16_t*)src16_v)[y + linesize + x];
       }
       else {
-
-        y_s = (float)src32_y[y + linesize + x];
-        u_s = (float)src32_u[y + linesize + x];
-        v_s = (float)src32_v[y + linesize + x];
+        y_s = (float)((float*)src32_y)[y + linesize + x];
+        u_s = (float)((float*)src32_u)[y + linesize + x];
+        v_s = (float)((float*)src32_v)[y + linesize + x];
       }
 
+      // YUV to RGB conversions
       yuv_rgb(y_s, u_s, v_s, &r, &g, &b);
+
+      // convert rgb to 0-1 scale
+      r = r / max_bit_depth;
+      g = g / max_bit_depth;
+      b = b / max_bit_depth;
 
       // Linearize the input based on pix_trc and apply OETF/OOTF on the rgb values.
       if (input->color_trc == AVCOL_TRC_ARIB_STD_B67) {
         // hlg_lin
+        hlg2lin(r, g, b, &r_linear, &g_linear, &b_linear);
+        // r_linear = r_linear * (pu21->L_max - pu21->L_min) + pu21->L_min;
+        // g_linear = g_linear * (pu21->L_max - pu21->L_min) + pu21->L_min;
+        // b_linear = b_linear * (pu21->L_max - pu21->L_min) + pu21->L_min;
       }
       else if (input->color_trc == AVCOL_TRC_SMPTE2084) {
         // pq_li
-        printf("Hello");
+        // TODO
+        r_linear = r;
+        g_linear = g;
+        b_linear = b;
       }
 
       // apply the pu21 encoding
-      float r_s = r * (pu21->multiplier);
-      float r_d = fmax(pu21->par[6] * (pow((pu21->par[0] + pu21->par[1] * pow(r_s, pu21->par[3])) / (1 + pu21->par[2] * pow(r_s, pu21->par[3])), pu21->par[4]) - pu21->par[5]), 0);
-      float g_s = g * (pu21->multiplier);
-      float g_d = fmax(pu21->par[6] * (pow((pu21->par[0] + pu21->par[1] * pow(g_s, pu21->par[3])) / (1 + pu21->par[2] * pow(g_s, pu21->par[3])), pu21->par[4]) - pu21->par[5]), 0);
-      float b_s = b * (pu21->multiplier);
-      float b_d = fmax(pu21->par[6] * (pow((pu21->par[0] + pu21->par[1] * pow(b_s, pu21->par[3])) / (1 + pu21->par[2] * pow(b_s, pu21->par[3])), pu21->par[4]) - pu21->par[5]), 0);
+      float r_s = r_linear * (pu21->multiplier);
+      float r_pu21 = fmax(pu21->par[6] * (pow((pu21->par[0] + pu21->par[1] * pow(r_s, pu21->par[3])) / (1 + pu21->par[2] * pow(r_s, pu21->par[3])), pu21->par[4]) - pu21->par[5]), 0);
+      float g_s = g_linear * (pu21->multiplier);
+      float g_pu21 = fmax(pu21->par[6] * (pow((pu21->par[0] + pu21->par[1] * pow(g_s, pu21->par[3])) / (1 + pu21->par[2] * pow(g_s, pu21->par[3])), pu21->par[4]) - pu21->par[5]), 0);
+      float b_s = b_linear * (pu21->multiplier);
+      float b_pu21 = fmax(pu21->par[6] * (pow((pu21->par[0] + pu21->par[1] * pow(b_s, pu21->par[3])) / (1 + pu21->par[2] * pow(b_s, pu21->par[3])), pu21->par[4]) - pu21->par[5]), 0);
 
       // convert the rgb values to respective Y, U and V values and pass them in their destination buffers.
       float y_d, u_d, v_d;
-      rgb_yuv(&r_d, &g_d, &b_d, &y_d, &u_d, &v_d);
+      rgb_yuv(&r_pu21, &g_pu21, &b_pu21, &y_d, &u_d, &v_d);
       if (depth <= 8) {
         dst_y[y * linesize + x] = y_d;
         dst_u[y * linesize + x] = u_d;
