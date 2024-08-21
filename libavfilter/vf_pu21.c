@@ -50,14 +50,8 @@ static av_cold int pu21_init(AVFilterContext* ctx) {
 }
 
 static const enum AVPixelFormat pix_fmts[] = {
-    AV_PIX_FMT_YUV444P, AV_PIX_FMT_YUV444P10,
-    AV_PIX_FMT_YUV444P10BE, AV_PIX_FMT_YUV444P10LE,
-    AV_PIX_FMT_YUV444P12, AV_PIX_FMT_YUV444P12BE,
-    AV_PIX_FMT_YUV444P12LE, AV_PIX_FMT_YUV444P14,
-    AV_PIX_FMT_YUV444P14LE, AV_PIX_FMT_YUV444P14BE,
-    AV_PIX_FMT_YUV444P16, AV_PIX_FMT_YUV444P16LE,
-    AV_PIX_FMT_YUV444P16BE,
-    AV_PIX_FMT_NONE
+     AV_PIX_FMT_YUV444P10LE,
+     AV_PIX_FMT_NONE
 };
 
 static void yuv_rgb(float y, float u, float v, float* r, float* g, float* b) {
@@ -222,10 +216,10 @@ static int config_input(AVFilterLink* inlink) {
   uninit(inlink->dst);
 
   s->depth = desc->comp[0].depth;
-  s->planewidth[1] = s->planewidth[2] = AV_CEIL_RSHIFT(inlink->w, desc->log2_chroma_w);
-  s->planewidth[0] = s->planewidth[3] = inlink->w;
-  s->planeheight[1] = s->planeheight[2] = AV_CEIL_RSHIFT(inlink->h, desc->log2_chroma_h);
-  s->planeheight[0] = s->planeheight[3] = inlink->h;
+  // s->planewidth[1] = s->planewidth[2] = AV_CEIL_RSHIFT(inlink->w, desc->log2_chroma_w);
+  // s->planewidth[0] = s->planewidth[3] = inlink->w;
+  // s->planeheight[1] = s->planeheight[2] = AV_CEIL_RSHIFT(inlink->h, desc->log2_chroma_h);
+  // s->planeheight[0] = s->planeheight[3] = inlink->h;
 
   s->nb_planes = av_pix_fmt_count_planes(inlink->format);
 
