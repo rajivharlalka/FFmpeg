@@ -202,4 +202,5 @@ const AVFilter ff_vf_pu21 = {
     FILTER_OUTPUTS(pu21_outputs),
     .priv_class = &pu21_class,
     .flags = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC,
+    FILTER_PIXFMTS(AV_PIX_FMT_YUV444P10LE)
 };
