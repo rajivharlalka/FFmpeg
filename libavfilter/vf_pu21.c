@@ -56,16 +56,18 @@ static const enum AVPixelFormat pix_fmts[] = {
 
 static void yuv_rgb(float y, float u, float v, float* r, float* g, float* b) {
   // YUV TO RGB conversion based on BT 2020
-  *r = av_clipf(y + 1.4746 * (v - 512), 0, 1024);
-  *g = av_clipf(y - ((0.2627 * 1.4746) / (0.6780)) * (v - 512) - (0.0593 * 1.8814) / (0.6780) * (u - 512), 0, 1024);
-  *b = av_clipf(y + 1.8814 * (u - 512), 0, 1024);
+  *r = y + 1.4746 * v;
+  *g = y - ((0.2627 * 1.4746) / (0.6780)) * v - (0.0593 * 1.8814) / (0.6780) * u;
+  *b = y + 1.8814 * u;
 }
 
 
-static void rgb2yuv(float r, float g, float b, int* y, int* u, int* v) {
-  *y = 0.2627 * r + 0.6780 * g + 0.0593 * b;
-  *u = (b - *y) / 1.8814;
-  *v = (r - *y) / 1.4746;
+static void rgb2yuv(float r, float g, float b, float* y, float* u, float* v) {
+  const float kr = 0.2627;
+  const float kb = 0.0593;
+  *y = kr * r + (1 - kr - kb) * g + kb * b;
+  *u = 0.5 * (b - *y) / (1 - kb);
+  *v = 0.5 * (r - *y) / (1 - kr);
 }
 
 
@@ -134,7 +136,7 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
 
   linesize = input->linesize[0] / 2;
   float rgb[3], r_linear, g_linear, b_linear;
-  uint16_t y_s, u_s, v_s;
+  float y_s, u_s, v_s;
   float y_d, u_d, v_d;
   float max_bit_depth = (1 << depth) - 1;
   av_log(inlink->dst, AV_LOG_DEBUG, "Filter input: %s, %ux%u depth:%d(%"PRId64").\n",
@@ -147,8 +149,13 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
       u_s = src16_u[y * linesize + x];
       v_s = src16_v[y * linesize + x];
 
+
       yuv_rgb(y_s, u_s, v_s, &rgb[0], &rgb[1], &rgb[2]);
+
       rgb2yuv(rgb[0], rgb[1], rgb[2], &y_d, &u_d, &v_d);
+      // y_d = y_s;
+      // u_d = u_s;
+      // v_d = v_s;
 
       // YUV to RGB conversions
       dst16_y[y * linesize + x] = y_d;
