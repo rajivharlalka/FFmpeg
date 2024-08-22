@@ -56,15 +56,24 @@ static const enum AVPixelFormat pix_fmts[] = {
 
 static void yuv_rgb(float y, float u, float v, float* r, float* g, float* b) {
   // YUV TO RGB conversion based on BT 2020
-  *r = y + 1.4746 * v;
-  *g = y - ((0.2627 * 1.4746) / (0.6780)) * v - (0.0593 * 1.8814) / (0.6780) * u;
-  *b = y + 1.8814 * u;
+  *r = av_clipf(y + 1.4746 * (v - 512), 0, 1024);
+  *g = av_clipf(y - ((0.2627 * 1.4746) / (0.6780)) * (v - 512) - (0.0593 * 1.8814) / (0.6780) * (u - 512), 0, 1024);
+  *b = av_clipf(y + 1.8814 * (u - 512), 0, 1024);
 }
 
 static void rgb_yuv(float* r, float* g, float* b, float* y, float* u, float* v) {
-  *y = 0.2627 * (*r) + 0.6780 + (*g) + 0.0593 * (*b);
-  *u = (*b - *y) / (1.8814);
-  *v = (*r - *y) / (1.4746);
+  float r_norm = *r / 1023.0f;
+  float g_norm = *g / 1023.0f;
+  float b_norm = *b / 1023.0f;
+
+
+  float y_float = 0.2627f * r_norm + 0.6780f * g_norm + 0.0593f * b_norm;
+  float u_float = (b_norm - y_float) / 1.8814f;
+  float v_float = (r_norm - y_float) / 1.4746f;
+
+  *y = av_clipf(y_float * 1023.0f + 0.5f, 0, 1023);
+  *u = av_clipf((u_float * 0.5f + 0.5f) * 1023.0f + 0.5f, 0, 1023);
+  *v = av_clipf((v_float + 0.5f + 0.5f) * 1023.0f + 0.5f, 0, 1023);
 }
 
 static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, float* b_d) {
@@ -176,9 +185,9 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
         v_s = (float)src_v[y + linesize + x];
       }
       else if (depth <= 16) {
-        y_s = (float)((uint16_t*)src16_y)[y + linesize + x];
-        u_s = (float)((uint16_t*)src16_u)[y + linesize + x];
-        v_s = (float)((uint16_t*)src16_v)[y + linesize + x];
+        y_s = (float)src16_y[y + linesize + x];
+        u_s = (float)src16_u[y + linesize + x];
+        v_s = (float)src16_v[y + linesize + x];
       }
       else {
         y_s = (float)((float*)src32_y)[y + linesize + x];
@@ -222,14 +231,14 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
       float y_d, u_d, v_d;
       rgb_yuv(&r_pu21, &g_pu21, &b_pu21, &y_d, &u_d, &v_d);
       if (depth <= 8) {
-        dst_y[y * linesize + x] = y_d;
-        dst_u[y * linesize + x] = u_d;
-        dst_v[y * linesize + x] = v_d;
+        dst_y[y * linesize + x] = (int8_t)y_d;
+        dst_u[y * linesize + x] = (int8_t)u_d;
+        dst_v[y * linesize + x] = (int8_t)v_d;
       }
       else if (depth <= 16) {
-        dst16_y[y * linesize + x] = y_d;
-        dst16_u[y * linesize + x] = u_d;
-        dst16_v[y * linesize + x] = v_d;
+        dst16_y[y * linesize + x] = (int16_t)y_d;
+        dst16_u[y * linesize + x] = (int16_t)u_d;
+        dst16_v[y * linesize + x] = (int16_t)v_d;
       }
       else {
         dst32_y[y * linesize + x] = y_d;
