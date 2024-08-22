@@ -12,7 +12,6 @@
 typedef struct PU21Context {
   const AVClass* class;
   double L_min, L_max;
-  double par[7];
   char* type;
   int multiplier;
 
@@ -27,25 +26,26 @@ typedef struct PU21Context {
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption pu21_options[] = {
     { "type", "Set the type of encoding", OFFSET(type), AV_OPT_TYPE_STRING, {.str = "banding_glare"}, 0, 0, FLAGS }, // options can be banding, banding_glare, peaks, peaks_glare
-    { "L_min", "Set the minimum luminance value", OFFSET(L_min), AV_OPT_TYPE_DOUBLE, {.dbl = 0.005}, 0.005, 10000, FLAGS },
-    { "L_max", "Set the maximum luminance value", OFFSET(L_max), AV_OPT_TYPE_DOUBLE, {.dbl = 10000}, 0.005, 10000, FLAGS },
+    { "L_min", "Set the minimum luminance value", OFFSET(L_min), AV_OPT_TYPE_DOUBLE, {.dbl = 0.01}, 0.005, 10000, FLAGS },
+    { "L_max", "Set the maximum luminance value", OFFSET(L_max), AV_OPT_TYPE_DOUBLE, {.dbl = 1000}, 0.005, 10000, FLAGS },
     { "multiplier", "Set the parameters for the encoding", OFFSET(multiplier), AV_OPT_TYPE_INT, {.i64 = 1}, 1, 10000, FLAGS},
     { NULL }
+};
+
+static const float PU21_MATRICES[4][7] = {
+  // Reference: "PU21: A novel perceptually uniform encoding for adapting existing quality metrics for HDR"
+  // Rafał K. Mantiuk and M. Azimi, Picture Coding Symposium 2021
+  // https://github.com/gfxdisp/pu21
+{1.070275272f, 0.4088273932f, 0.153224308f, 0.2520326168f, 1.063512885f, 1.14115047f, 521.4527484f},  // BANDING
+{0.353487901f, 0.3734658629f, 8.277049286e-05f, 0.9062562627f, 0.09150303166f, 0.9099517204f, 596.3148142f},  // BANDING_GLARE
+{1.043882782f, 0.6459495343f, 0.3194584211f, 0.374025247f, 1.114783422f, 1.095360363f, 384.9217577f},  // PEAKS
+{816.885024f, 1479.463946f, 0.001253215609f, 0.9329636822f, 0.06746643971f, 1.573435413f, 419.6006374f}  // PEAKS_GLARE
 };
 
 AVFILTER_DEFINE_CLASS(pu21);
 
 static av_cold int pu21_init(AVFilterContext* ctx) {
   PU21Context* pu21 = ctx->priv;
-
-  // These are the default parameters for the banding_glare encoding, would add rest of the parameters using switch case based on pu21->type
-  pu21->par[0] = 0.353487901;
-  pu21->par[1] = 0.3734658629;
-  pu21->par[2] = 8.277049286 * pow(10, -5);
-  pu21->par[3] = 0.9062562627;
-  pu21->par[4] = 0.09150303166;
-  pu21->par[5] = 0.9099517204;
-  pu21->par[6] = 596.3148142;
   return 0;
 }
 
@@ -71,7 +71,7 @@ static void rgb2yuv(float r, float g, float b, float* y, float* u, float* v) {
 }
 
 
-static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, float* b_d) {
+static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, float* b_d, const int depth, const int L_black, const int L_peak) {
   // hlg to linear conversion
   float a = 0.17883277;
   float b = 1 - 4 * a;
@@ -80,19 +80,22 @@ static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, 
 
   float r_s, g_s, b_s;
 
+  // convert rgb to 0-1 range
+  r_in = r_in / (1 << depth);
+  g_in = g_in / (1 << depth);
+  b_in = b_in / (1 << depth);
+
   // Apply the OETF
-
-  r_s = (r_in <= 0.5) ? pow(r_in, 2) / 3.0 : (exp((r_in - c) / a) + b) / 12;
-  g_s = (g_in <= 0.5) ? pow(g_in, 2) / 3.0 : (exp((g_in - c) / a) + b) / 12;
-  b_s = (b_in <= 0.5) ? pow(b_in, 2) / 3.0 : (exp((b_in - c) / a) + b) / 12;
-
+  r_s = (r_in <= 0.5) ? (r_in * r_in) / 3.0 : (exp((r_in - c) / a) + b) / 12.0;
+  g_s = (g_in <= 0.5) ? (g_in * g_in) / 3.0 : (exp((g_in - c) / a) + b) / 12.0;
+  b_s = (b_in <= 0.5) ? (b_in * b_in) / 3.0 : (exp((b_in - c) / a) + b) / 12.0;
 
   float Y_s = 0.2627 * r_s + 0.6780 * g_s + 0.0593 * b_s;
 
   // Apply OOTF
-  *r_d = pow(Y_s, gamma) * r_s;
-  *g_d = pow(Y_s, gamma) * g_s;
-  *b_d = pow(Y_s, gamma) * b_s;
+  *r_d = (pow(Y_s, gamma) * r_s) * (L_peak - L_black) + L_black;
+  *r_d = (pow(Y_s, gamma) * r_s) * (L_peak - L_black) + L_black;
+  *r_d = (pow(Y_s, gamma) * r_s) * (L_peak - L_black) + L_black;
 }
 
 static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
@@ -117,8 +120,6 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
     av_frame_copy_props(out, input);
   }
 
-  // const int height = pu21->planeheight[0];
-  // const int width = pu21->planewidth[0];
   const int height = input->height;
   const int width = input->width;
 
@@ -138,7 +139,8 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
   float rgb[3], r_linear, g_linear, b_linear;
   float y_s, u_s, v_s;
   float y_d, u_d, v_d;
-  float max_bit_depth = (1 << depth) - 1;
+  float max_bit_depth = (1 << depth);
+  out->color_trc = AVCOL_TRC_LINEAR;
   av_log(inlink->dst, AV_LOG_DEBUG, "Filter input: %s, %ux%u depth:%d(%"PRId64").\n",
     av_get_pix_fmt_name(input->format),
     input->width, input->height, depth, input->pts);
@@ -149,15 +151,25 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
       u_s = src16_u[y * linesize + x];
       v_s = src16_v[y * linesize + x];
 
-
       yuv_rgb(y_s, u_s, v_s, &rgb[0], &rgb[1], &rgb[2]);
 
-      rgb2yuv(rgb[0], rgb[1], rgb[2], &y_d, &u_d, &v_d);
-      // y_d = y_s;
-      // u_d = u_s;
-      // v_d = v_s;
+      // EOTF/OOTF conversion
+      hlg2lin(rgb[0], rgb[1], rgb[2], &r_linear, &g_linear, &b_linear, depth, pu21->L_min, pu21->L_max);
 
-      // YUV to RGB conversions
+      // PU21 conversion ( currently for bandling_glare)
+      // float r_d = fmax(PU21_MATRICES[1][6] * (pow((PU21_MATRICES[1][0] + PU21_MATRICES[1][1] * pow(r_linear, PU21_MATRICES[1][3])) / (1 + PU21_MATRICES[1][2] * pow(r_linear, PU21_MATRICES[1][3])), PU21_MATRICES[1][4]) - PU21_MATRICES[1][5]), 0);
+      // float g_d = fmax(PU21_MATRICES[1][6] * (pow((PU21_MATRICES[1][0] + PU21_MATRICES[0][1] * pow(g_linear, PU21_MATRICES[1][3])) / (1 + PU21_MATRICES[1][2] * pow(g_linear, PU21_MATRICES[1][3])), PU21_MATRICES[1][4]) - PU21_MATRICES[1][5]), 0);
+      // float b_d = fmax(PU21_MATRICES[1][6] * (pow((PU21_MATRICES[1][0] + PU21_MATRICES[1][1] * pow(b_linear, PU21_MATRICES[1][3])) / (1 + PU21_MATRICES[1][2] * pow(b_linear, PU21_MATRICES[1][3])), PU21_MATRICES[1][4]) - PU21_MATRICES[1][5]), 0);
+
+      // direct for yuv->rgb->yuv conversion
+      // rgb2yuv(rgb[0], rgb[1], rgb[2], &y_d, &u_d, &v_d);
+
+      // yuv->rgb -> ootf/ootf -> yuv consersion 
+      rgb2yuv(r_linear, g_linear, b_linear, &y_d, &u_d, &v_d);
+
+      // yuv -> rgb -> ootf/ootf -> pu21-> yuv conversion
+      // rgb2yuv(r_d, g_d, b_d, &y_d, &u_d, &v_d);
+
       dst16_y[y * linesize + x] = y_d;
       dst16_u[y * linesize + x] = u_d;
       dst16_v[y * linesize + x] = v_d;
