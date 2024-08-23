@@ -121,6 +121,7 @@ OBJS-$(CONFIG_AXCORRELATE_FILTER)            += af_axcorrelate.o
 OBJS-$(CONFIG_AZMQ_FILTER)                   += f_zmq.o
 OBJS-$(CONFIG_BANDPASS_FILTER)               += af_biquads.o
 OBJS-$(CONFIG_BANDREJECT_FILTER)             += af_biquads.o
+OBJS-$(CONFIG_PU21_FILTER)                   += vf_pu21.o
 OBJS-$(CONFIG_BASS_FILTER)                   += af_biquads.o
 OBJS-$(CONFIG_BIQUAD_FILTER)                 += af_biquads.o
 OBJS-$(CONFIG_BS2B_FILTER)                   += af_bs2b.o

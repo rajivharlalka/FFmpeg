@@ -18,6 +18,7 @@ version <next>:
 - D3D12VA HEVC encoder
 - Cropping metadata parsing and writing in Matroska and MP4/MOV de/muxers
 - Intel QSV-accelerated VVC decoding
+- Addition of vf_pu21 encoding filter
 
 
 version 7.0:
