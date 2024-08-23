@@ -136,13 +136,10 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
     return ff_filter_frame(outlink, out);
 }
 
-static av_cold void uninit(AVFilterContext* ctx) {}
 
 static int config_input(AVFilterLink* inlink) {
     const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(inlink->format);
     PU21Context* s = inlink->dst->priv;
-
-    uninit(inlink->dst);
 
     s->depth = desc->comp[0].depth;
     s->nb_planes = av_pix_fmt_count_planes(inlink->format);
@@ -171,7 +168,6 @@ const AVFilter ff_vf_pu21 = {
     .description = NULL_IF_CONFIG_SMALL("Convert HDR linear values to PU values using PU21 transform"),
     .priv_size = sizeof(PU21Context),
     .init = pu21_init,
-    .uninit = uninit,
     FILTER_INPUTS(pu21_inputs),
     FILTER_OUTPUTS(pu21_outputs),
     .priv_class = &pu21_class,
