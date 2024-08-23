@@ -8,7 +8,7 @@
 #include "libavutil/internal.h"
 #include "video.h"
 
-static enum pu21_mode {
+enum pu21_mode {
   BANDING,
   BANDING_GLARE,
   PEAKS,
@@ -165,9 +165,7 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
   return ff_filter_frame(outlink, out);
 }
 
-static av_cold void uninit(AVFilterContext* ctx) {
-  PU21Context* s = ctx->priv;
-}
+static av_cold void uninit(AVFilterContext* ctx) {}
 
 static int config_input(AVFilterLink* inlink) {
   const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(inlink->format);
