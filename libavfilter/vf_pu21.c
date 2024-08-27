@@ -64,14 +64,16 @@ static const AVOption pu21_options[] = {
 
 AVFILTER_DEFINE_CLASS(pu21);
 
-static av_cold int pu21_init(AVFilterContext* ctx) {
+static av_cold int pu21_init(AVFilterContext* ctx) 
+{
     PU21Context* pu21 = ctx->priv;
     pu21->mode = BANDING_GLARE;
     pu21->multiplier = 1;
     return 0;
 }
 
-static float apply_pu21(float pixel_val, PU21Context* pu21) {
+static float apply_pu21(float pixel_val, PU21Context* pu21)
+{
     float Y, V;
     const float* pu21_param = pu21_params[pu21->mode];
     Y = pixel_val * (pu21->multiplier);
@@ -105,7 +107,8 @@ DEFINE_PU21_FILTER(8, uint8_t, 1)
 DEFINE_PU21_FILTER(16, uint16_t, 2)
 DEFINE_PU21_FILTER(32, float, 4)
 
-static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
+static int filter_frame(AVFilterLink* inlink, AVFrame* input) 
+{
     AVFilterContext* ctx = inlink->dst;
     PU21Context* pu21 = ctx->priv;
 
@@ -137,7 +140,8 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
 }
 
 
-static int config_input(AVFilterLink* inlink) {
+static int config_input(AVFilterLink* inlink)
+{
     const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(inlink->format);
     PU21Context* s = inlink->dst->priv;
 
