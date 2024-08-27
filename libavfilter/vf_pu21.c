@@ -87,7 +87,7 @@ static void rgb2yuv(float r, float g, float b, float* y, float* u, float* v) {
     *v = 0.5 * (r - *y) / (1 - kr);
 }
 
-static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, float* b_d, const int depth, const int L_black, const int L_peak) {
+static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, float* b_d, const int depth, const double L_black, const double L_peak) {
     // hlg to linear conversion
     float a = 0.17883277;
     float b = 1 - 4 * a;
@@ -144,9 +144,10 @@ static void pu21_encode_##name(AVFilterContext* ctx, AVFrame* in, AVFrame* out) 
             srcpix_u = src_u[y * linesize + x];                                     \
             srcpix_v = src_v[y * linesize + x];                                     \
                                                                                     \
-            float r,g,b,y_val,u_val,v_val;                                          \
+            float r,g,b,r_lin,g_lin,b_lin,y_val,u_val,v_val;                        \
             yuv2rgb(srcpix_y, srcpix_u, srcpix_v, &r, &g, &b);                      \
-            rgb2yuv(r,g,b, &y_val, &u_val, &v_val);                                 \
+            hlg2lin(r, g, b, &r_lin, &g_lin, &b_lin, 10, 3000, 0.01);               \
+            rgb2yuv(r_lin,g_lin,b_lin, &y_val, &u_val, &v_val);                                 \
                                                                                     \
             dst_y[y * linesize + x] = (type)(y_val);                                \
             dst_u[y * linesize + x] = (type)(u_val);                                \
