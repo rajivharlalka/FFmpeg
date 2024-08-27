@@ -64,16 +64,57 @@ static const AVOption pu21_options[] = {
 
 AVFILTER_DEFINE_CLASS(pu21);
 
-static av_cold int pu21_init(AVFilterContext* ctx) 
-{
+static av_cold int pu21_init(AVFilterContext* ctx) {
     PU21Context* pu21 = ctx->priv;
     pu21->mode = BANDING_GLARE;
     pu21->multiplier = 1;
     return 0;
 }
 
-static float apply_pu21(float pixel_val, PU21Context* pu21)
-{
+// YUV TO RGB conversion based on BT 2020
+static void yuv2rgb(float y, float u, float v, float* r, float* g, float* b) {
+    *r = y + 1.4746 * v;
+    *g = y - ((0.2627 * 1.4746) / (0.6780)) * v - (0.0593 * 1.8814) / (0.6780) * u;
+    *b = y + 1.8814 * u;
+}
+
+
+static void rgb2yuv(float r, float g, float b, float* y, float* u, float* v) {
+    const float kr = 0.2627;
+    const float kb = 0.0593;
+    *y = kr * r + (1 - kr - kb) * g + kb * b;
+    *u = 0.5 * (b - *y) / (1 - kb);
+    *v = 0.5 * (r - *y) / (1 - kr);
+}
+
+static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, float* b_d, const int depth, const int L_black, const int L_peak) {
+    // hlg to linear conversion
+    float a = 0.17883277;
+    float b = 1 - 4 * a;
+    float c = 0.5 - a * log(4 * a);
+    float gamma = 1.2;
+
+    float r_s, g_s, b_s;
+
+    // convert rgb to 0-1 range
+    r_in = r_in / (1 << depth);
+    g_in = g_in / (1 << depth);
+    b_in = b_in / (1 << depth);
+
+    // Apply the OETF
+    r_s = (r_in <= 0.5) ? (r_in * r_in) / 3.0 : (exp((r_in - c) / a) + b) / 12.0;
+    g_s = (g_in <= 0.5) ? (g_in * g_in) / 3.0 : (exp((g_in - c) / a) + b) / 12.0;
+    b_s = (b_in <= 0.5) ? (b_in * b_in) / 3.0 : (exp((b_in - c) / a) + b) / 12.0;
+
+    float Y_s = 0.2627 * r_s + 0.6780 * g_s + 0.0593 * b_s;
+
+    // Apply OOTF
+    *r_d = (pow(Y_s, gamma) * r_s) * (L_peak - L_black) + L_black;
+    *r_d = (pow(Y_s, gamma) * r_s) * (L_peak - L_black) + L_black;
+    *r_d = (pow(Y_s, gamma) * r_s) * (L_peak - L_black) + L_black;
+}
+
+static float apply_pu21(float pixel_val, PU21Context* pu21) {
     float Y, V;
     const float* pu21_param = pu21_params[pu21->mode];
     Y = pixel_val * (pu21->multiplier);
@@ -88,17 +129,28 @@ static void pu21_encode_##name(AVFilterContext* ctx, AVFrame* in, AVFrame* out) 
     const int height = in->height;                                                  \
     const int width = in->width;                                                    \
                                                                                     \
-    int plane;                                                                      \
-    for (plane = 0; plane < pu21->nb_planes; plane++) {                             \
-        const type* src = (const type *)in->data[plane];                            \
-        type* dst = (type *)out->data[plane];                                       \
-        int  linesize = in->linesize[plane] / div;                                  \
-        type pixel_val;                                                             \
-        for (int y = 0; y < height; y++) {                                          \
-            for (int x = 0; x < width; x++) {                                       \
-                pixel_val = src[y * linesize + x];                                  \
-                dst[y * linesize + x] = (type)apply_pu21(pixel_val, pu21);          \
-            }                                                                       \
+    const type* src_y = (const type *)in->data[0];                                  \
+    const type* src_u = (const type *)in->data[1];                                  \
+    const type* src_v = (const type *)in->data[2];                                  \
+                                                                                    \
+    type* dst_y = (type *)out->data[0];                                             \
+    type* dst_u = (type *)out->data[1];                                             \
+    type* dst_v = (type *)out->data[2];                                             \
+    int  linesize = in->linesize[0] / div;                                          \
+    type srcpix_y,srcpix_u, srcpix_v;                                               \
+    for (int y = 0; y < height; y++) {                                              \
+        for (int x = 0; x < width; x++) {                                           \
+            srcpix_y = src_y[y * linesize + x];                                     \
+            srcpix_u = src_u[y * linesize + x];                                     \
+            srcpix_v = src_v[y * linesize + x];                                     \
+                                                                                    \
+            float r,g,b,y_val,u_val,v_val;                                          \
+            yuv2rgb(srcpix_y, srcpix_u, srcpix_v, &r, &g, &b);                      \
+            rgb2yuv(r,g,b, &y_val, &u_val, &v_val);                                 \
+                                                                                    \
+            dst_y[y * linesize + x] = (type)(y_val);                                \
+            dst_u[y * linesize + x] = (type)(u_val);                                \
+            dst_v[y * linesize + x] = (type)(v_val);                                \
         }                                                                           \
     }                                                                               \
 }
@@ -107,8 +159,7 @@ DEFINE_PU21_FILTER(8, uint8_t, 1)
 DEFINE_PU21_FILTER(16, uint16_t, 2)
 DEFINE_PU21_FILTER(32, float, 4)
 
-static int filter_frame(AVFilterLink* inlink, AVFrame* input) 
-{
+static int filter_frame(AVFilterLink* inlink, AVFrame* input) {
     AVFilterContext* ctx = inlink->dst;
     PU21Context* pu21 = ctx->priv;
 
@@ -117,7 +168,8 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input)
 
     if (av_frame_is_writable(input)) {
         out = input;
-    } else {
+    }
+    else {
         out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
         if (!out) {
             av_frame_free(&input);
@@ -128,9 +180,11 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input)
 
     if (pu21->depth <= 8) {
         pu21_encode_8(ctx, input, out);
-    } else if (pu21->depth <= 16) {
+    }
+    else if (pu21->depth <= 16) {
         pu21_encode_16(ctx, input, out);
-    } else {
+    }
+    else {
         pu21_encode_32(ctx, input, out);
     }
 
@@ -140,8 +194,7 @@ static int filter_frame(AVFilterLink* inlink, AVFrame* input)
 }
 
 
-static int config_input(AVFilterLink* inlink)
-{
+static int config_input(AVFilterLink* inlink) {
     const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(inlink->format);
     PU21Context* s = inlink->dst->priv;
 
@@ -176,4 +229,5 @@ const AVFilter ff_vf_pu21 = {
     FILTER_OUTPUTS(pu21_outputs),
     .priv_class = &pu21_class,
     .flags = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC,
+    FILTER_SINGLE_PIXFMT(AV_PIX_FMT_YUV444P10LE)
 };
