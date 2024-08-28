@@ -80,11 +80,14 @@ static void yuv2rgb(float y, float u, float v, float* r, float* g, float* b) {
 
 
 static void rgb2yuv(float r, float g, float b, float* y, float* u, float* v) {
-    const float kr = 0.2627;
-    const float kb = 0.0593;
-    *y = kr * r + (1 - kr - kb) * g + kb * b;
-    *u = 0.5 * (b - *y) / (1 - kb);
-    *v = 0.5 * (r - *y) / (1 - kr);
+    // const float kr = 0.2627;
+    // const float kb = 0.0593
+    // *y = kr * r + (1 - kr - kb) * g + kb * b;
+    // *u = 0.5 * (b - *y) / (1 - kb);
+    // *v = 0.5 * (r - *y) / (1 - kr);
+    *y =  0.2627*r + 0.6780*g + 0.0593*b;
+    *u = -0.2627*r - 0.6780*g + 0.9407*b;
+    *v =  0.7373*r - 0.6780*g - 0.0593*b;
 }
 
 static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, float* b_d, const int depth, const double L_black, const double L_peak) {
@@ -146,7 +149,7 @@ static void pu21_encode_##name(AVFilterContext* ctx, AVFrame* in, AVFrame* out) 
                                                                                     \
             float r,g,b,r_lin,g_lin,b_lin,y_val,u_val,v_val;                        \
             yuv2rgb(srcpix_y, srcpix_u, srcpix_v, &r, &g, &b);                      \
-            hlg2lin(r, g, b, &r_lin, &g_lin, &b_lin, 10, 3000, 0.01);               \
+            hlg2lin(r, g, b, &r_lin, &g_lin, &b_lin, 10, 200, 0.01);               \
             rgb2yuv(r_lin,g_lin,b_lin, &y_val, &u_val, &v_val);                                 \
                                                                                     \
             dst_y[y * linesize + x] = (type)(y_val);                                \
