@@ -97,9 +97,9 @@ static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, 
     float r_s, g_s, b_s;
 
     // convert rgb to 0-1 range
-    r_in = r_in / (1 << depth);
-    g_in = g_in / (1 << depth);
-    b_in = b_in / (1 << depth);
+    r_in = r_in / ((1 << depth)-1);
+    g_in = g_in / ((1 << depth)-1);
+    b_in = b_in / ((1 << depth)-1);
 
     // Apply the OETF
     r_s = (r_in <= 0.5) ? (r_in * r_in) / 3.0 : (exp((r_in - c) / a) + b) / 12.0;
@@ -110,8 +110,8 @@ static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, 
 
     // Apply OOTF
     *r_d = (pow(Y_s, gamma) * r_s) * (L_peak - L_black) + L_black;
-    *r_d = (pow(Y_s, gamma) * r_s) * (L_peak - L_black) + L_black;
-    *r_d = (pow(Y_s, gamma) * r_s) * (L_peak - L_black) + L_black;
+    *g_d = (pow(Y_s, gamma) * g_s) * (L_peak - L_black) + L_black;
+    *b_d = (pow(Y_s, gamma) * b_s) * (L_peak - L_black) + L_black;
 }
 
 static float apply_pu21(float pixel_val, PU21Context* pu21) {
