@@ -73,21 +73,21 @@ static av_cold int pu21_init(AVFilterContext* ctx) {
 
 // YUV TO RGB conversion based on BT 2020
 static void yuv2rgb(float y, float u, float v, float* r, float* g, float* b) {
-    *r = y + 1.4746 * v;
-    *g = y - ((0.2627 * 1.4746) / (0.6780)) * v - (0.0593 * 1.8814) / (0.6780) * u;
-    *b = y + 1.8814 * u;
+    *r = y + 1.4746 * (v -512);
+    *g = y - ((0.2627 * 1.4746) / (0.6780)) * (v-512) - (0.0593 * 1.8814) / (0.6780) * (u-512);
+    *b = y + 1.8814 * (u-512);
 }
 
 
 static void rgb2yuv(float r, float g, float b, float* y, float* u, float* v) {
     // const float kr = 0.2627;
-    // const float kb = 0.0593
+    // const float kb = 0.0593;
     // *y = kr * r + (1 - kr - kb) * g + kb * b;
-    // *u = 0.5 * (b - *y) / (1 - kb);
-    // *v = 0.5 * (r - *y) / (1 - kr);
+    // *u = 0.5 * (b - *y) / (1 - kb) + 512;
+    // *v = 0.5 * (r - *y) / (1 - kr) + 512;
     *y =  0.2627*r + 0.6780*g + 0.0593*b;
-    *u = -0.2627*r - 0.6780*g + 0.9407*b;
-    *v =  0.7373*r - 0.6780*g - 0.0593*b;
+    *u = -0.2627*r - 0.6780*g + 0.9407*b + 512;
+    *v =  0.7373*r - 0.6780*g - 0.0593*b + 512;
 }
 
 static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, float* b_d, const int depth, const double L_black, const double L_peak) {
@@ -97,6 +97,7 @@ static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, 
     float c = 0.5 - a * log(4 * a);
     float gamma = 1.2;
 
+    float Y_s;
     float r_s, g_s, b_s;
 
     // convert rgb to 0-1 range
@@ -109,12 +110,12 @@ static void hlg2lin(float r_in, float g_in, float b_in, float* r_d, float* g_d, 
     g_s = (g_in <= 0.5) ? (g_in * g_in) / 3.0 : (exp((g_in - c) / a) + b) / 12.0;
     b_s = (b_in <= 0.5) ? (b_in * b_in) / 3.0 : (exp((b_in - c) / a) + b) / 12.0;
 
-    float Y_s = 0.2627 * r_s + 0.6780 * g_s + 0.0593 * b_s;
+    Y_s = 0.2627 * r_s + 0.6780 * g_s + 0.0593 * b_s;
 
     // Apply OOTF
-    *r_d = (pow(Y_s, gamma) * r_s) * (L_peak - L_black) + L_black;
-    *g_d = (pow(Y_s, gamma) * g_s) * (L_peak - L_black) + L_black;
-    *b_d = (pow(Y_s, gamma) * b_s) * (L_peak - L_black) + L_black;
+    *r_d = (powf(Y_s, gamma) * r_s) * (L_peak - L_black) + L_black;
+    *g_d = (powf(Y_s, gamma) * g_s) * (L_peak - L_black) + L_black;
+    *b_d = (powf(Y_s, gamma) * b_s) * (L_peak - L_black) + L_black;
 }
 
 static float apply_pu21(float pixel_val, PU21Context* pu21) {
@@ -141,16 +142,16 @@ static void pu21_encode_##name(AVFilterContext* ctx, AVFrame* in, AVFrame* out) 
     type* dst_v = (type *)out->data[2];                                             \
     int  linesize = in->linesize[0] / div;                                          \
     type srcpix_y,srcpix_u, srcpix_v;                                               \
+    float r,g,b,r_lin,g_lin,b_lin,y_val,u_val,v_val;                        \
     for (int y = 0; y < height; y++) {                                              \
         for (int x = 0; x < width; x++) {                                           \
             srcpix_y = src_y[y * linesize + x];                                     \
             srcpix_u = src_u[y * linesize + x];                                     \
             srcpix_v = src_v[y * linesize + x];                                     \
                                                                                     \
-            float r,g,b,r_lin,g_lin,b_lin,y_val,u_val,v_val;                        \
             yuv2rgb(srcpix_y, srcpix_u, srcpix_v, &r, &g, &b);                      \
-            hlg2lin(r, g, b, &r_lin, &g_lin, &b_lin, 10, 200, 0.01);               \
-            rgb2yuv(r_lin,g_lin,b_lin, &y_val, &u_val, &v_val);                                 \
+            hlg2lin(r, g, b, &r_lin, &g_lin, &b_lin,    pu21->depth, 0.01, 1000);               \
+            rgb2yuv(r_lin,g_lin,b_lin, &y_val, &u_val, &v_val);                     \
                                                                                     \
             dst_y[y * linesize + x] = (type)(y_val);                                \
             dst_u[y * linesize + x] = (type)(u_val);                                \
